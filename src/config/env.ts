@@ -243,6 +243,7 @@ export const config = {
       | "twilio"
       | "africas_talking"
       | "log",
+    alertEmail: process.env.NOTIFICATION_ALERT_EMAIL || "",
     twilioAccountSid: process.env.TWILIO_ACCOUNT_SID || "",
     twilioAuthToken: process.env.TWILIO_AUTH_TOKEN || "",
     twilioFromNumber: process.env.TWILIO_FROM_NUMBER || "",
