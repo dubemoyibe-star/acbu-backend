@@ -2,8 +2,6 @@
  * USDC deposit: convert USDC→XLM in backend (LP/swap service), then mint ACBU.
  * Pools and swaps run independently; user does not wait. Mint is approved once conversion succeeds.
  */
-
-
 import type { ConsumeMessage } from "amqplib";
 import { connectRabbitMQ, QUEUES } from "../config/rabbitmq";
 import { logger } from "../config/logger";
