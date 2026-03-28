@@ -16,6 +16,9 @@ export async function connectRabbitMQ(): Promise<Channel> {
     channel = ch;
     logger.info("RabbitMQ connected successfully");
 
+    await ch.assertExchange(EXCHANGES.DLX, "direct", { durable: true });
+    logger.info("Dead letter exchange asserted");
+
     // Handle connection errors
     connection.on("error", (err: Error) => {
       logger.error("RabbitMQ connection error", err);
@@ -32,6 +35,34 @@ export async function connectRabbitMQ(): Promise<Channel> {
     logger.error("Failed to connect to RabbitMQ", error);
     throw error;
   }
+}
+
+export interface QueueOptions extends amqp.Options.AssertQueue {
+  deadLetterQueue?: string;
+}
+
+export async function assertQueueWithDLQ(
+  queueName: string,
+  options: QueueOptions = {},
+): Promise<amqp.Replies.AssertQueue> {
+  const ch = getRabbitMQChannel();
+  const dlqName = `${queueName}_dlq`;
+
+  await ch.assertQueue(dlqName, { durable: true });
+
+  await ch.bindQueue(dlqName, EXCHANGES.DLX, queueName);
+
+  const queueOptions: amqp.Options.AssertQueue = {
+    ...options,
+    durable: true,
+    arguments: {
+      ...options.arguments,
+      deadLetterExchange: EXCHANGES.DLX,
+      deadLetterRoutingKey: queueName,
+    },
+  };
+
+  return ch.assertQueue(queueName, queueOptions);
 }
 
 export async function disconnectRabbitMQ(): Promise<void> {
@@ -68,10 +99,12 @@ export const QUEUES = {
   ACBU_ESCROW_EVENTS: "acbu_escrow_events",
   XLM_TO_ACBU: "xlm_to_acbu", // XLM deposit: sell XLM and mint ACBU to user
   USDC_CONVERT_AND_MINT: "usdc_convert_and_mint", // USDC deposit: convert USDC→XLM (backend), then mint
+  AUDIT_LOGS: "audit_logs",
 } as const;
 
 // Exchange names
 export const EXCHANGES = {
   RESERVE_EVENTS: "reserve_events",
   TRANSACTION_EVENTS: "transaction_events",
+  DLX: "dlx", // Dead letter exchange
 } as const;

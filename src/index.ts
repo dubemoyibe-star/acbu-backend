@@ -105,6 +105,10 @@ async function startServer() {
         await import("./jobs/notificationConsumer");
       await startNotificationConsumer();
 
+      // Start audit consumer (AUDIT_LOGS → database)
+      const { startAuditConsumer } = await import("./jobs/auditConsumer");
+      await startAuditConsumer();
+
       // Start outbound webhook consumer (WEBHOOKS → deliver with HMAC-SHA256)
       const { startWebhookConsumer } = await import("./jobs/webhookConsumer");
       await startWebhookConsumer();
