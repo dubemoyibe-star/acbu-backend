@@ -10,7 +10,10 @@ import {
 } from "../controllers/mintController";
 import { burnAcbu } from "../controllers/burnController";
 import { validateApiKey } from "../middleware/auth";
-import { requireMinTier, requireSegmentScope } from "../middleware/segmentGuard";
+import {
+  requireMinTier,
+  requireSegmentScope,
+} from "../middleware/segmentGuard";
 import { apiKeyRateLimiter } from "../middleware/rateLimiter";
 
 const router: IRouter = Router();
