@@ -57,7 +57,7 @@ describe("AuditConsumer", () => {
     (prisma.auditTrail.create as jest.Mock).mockResolvedValue({ id: "1" });
 
     // Trigger the consumer callback manually
-    mockChannel.consume.mockImplementation((queue, callback) => {
+    mockChannel.consume.mockImplementation((_queue, callback) => {
       callback(mockMsg);
     });
 
@@ -84,7 +84,7 @@ describe("AuditConsumer", () => {
       // Fast forward timers for retry
       jest.useFakeTimers());
 
-    mockChannel.consume.mockImplementation((queue, callback) => {
+    mockChannel.consume.mockImplementation((_queue, callback) => {
       callback(mockMsg);
     });
 
