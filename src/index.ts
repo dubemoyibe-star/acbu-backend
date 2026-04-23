@@ -49,7 +49,7 @@ app.use(standardRateLimiter);
 app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // Routes
-app.use(`/${config.apiVersion}`, routes);
+app.use(`/api/${config.apiVersion}`, routes);
 
 // Error handling (must be last)
 app.use(errorHandler);
@@ -90,16 +90,6 @@ async function startServer() {
     }
 
     if (rabbitReady) {
-      // Start KYC processing consumer
-      const { startKycProcessingConsumer } =
-        await import("./jobs/kycProcessingJob");
-      await startKycProcessingConsumer();
-
-      // Start wallet activation consumer (send XLM when KYC fee paid)
-      const { startWalletActivationConsumer } =
-        await import("./jobs/walletActivationJob");
-      await startWalletActivationConsumer();
-
       // Start notification consumer (OTP_SEND + NOTIFICATIONS → email/SMS)
       const { startNotificationConsumer } =
         await import("./jobs/notificationConsumer");
@@ -181,6 +171,7 @@ async function startServer() {
     app.listen(config.port, () => {
       logger.info(`Server running on port ${config.port}`);
       logger.info(`Environment: ${config.nodeEnv}`);
+      logger.info(`API Version: ${config.apiVersion}`);
       logger.info(
         `API Documentation: http://localhost:${config.port}/api-docs`,
       );

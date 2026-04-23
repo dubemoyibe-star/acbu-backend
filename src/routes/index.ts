@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { config } from "../config/env";
+import { deepHealthCheck } from "../controllers/healthController";
 import reserveRoutes from "./reserveRoutes";
-import kycRoutes from "./kycRoutes";
 import recipientRoutes from "./recipientRoutes";
 import transferRoutes from "./transferRoutes";
 import userRoutes from "./userRoutes";
@@ -26,10 +26,12 @@ import retailFundsRoutes from "./retailFundsRoutes";
 import businessFundsRoutes from "./businessFundsRoutes";
 import governmentFundsRoutes from "./governmentFundsRoutes";
 import investmentRoutes from "./investmentRoutes";
+import fiatRoutes from "./fiatRoutes";
+import configRoutes from "./configRoutes";
 
 const router: ReturnType<typeof Router> = Router();
 
-// Health check
+// Shallow health check — always 200, no dependency probing (used by load balancers)
 router.get("/health", (_req, res) => {
   res.json({
     status: "ok",
@@ -39,34 +41,15 @@ router.get("/health", (_req, res) => {
   });
 });
 
+// Deep health check — probes PostgreSQL, MongoDB, RabbitMQ; returns 503 if any are down
+router.get("/health/deep", deepHealthCheck);
+
 // Extended health / metrics (reserve ratio when available; for monitoring dashboards)
-router.get("/health/metrics", async (_req, res) => {
-  try {
-    const { reserveTracker } =
-      await import("../services/reserve/ReserveTracker");
-    const ratio = await reserveTracker.calculateReserveRatio();
-    const status = await reserveTracker.getReserveStatus();
-    res.json({
-      status: "ok",
-      timestamp: new Date().toISOString(),
-      uptime: process.uptime(),
-      reserveRatio: ratio,
-      overcollateralizationRatio: status.overcollateralizationRatio,
-      reserveHealth: status.health,
-    });
-  } catch (e) {
-    res.status(500).json({
-      status: "error",
-      timestamp: new Date().toISOString(),
-      error: (e as Error).message,
-    });
-  }
-});
+router.get("/health/metrics", deepHealthCheck);
 
 // API routes
 router.use("/auth", authRoutes);
 router.use("/reserves", reserveRoutes);
-router.use("/kyc", kycRoutes);
 router.use("/recipient", recipientRoutes);
 router.use("/transfers", transferRoutes);
 router.use("/users", userRoutes);
@@ -89,6 +72,8 @@ router.use("/retail", retailFundsRoutes);
 router.use("/business", businessFundsRoutes);
 router.use("/government", governmentFundsRoutes);
 router.use("/investment", investmentRoutes);
+router.use("/fiat", fiatRoutes);
+router.use("/config", configRoutes);
 router.use("/webhooks", webhookRoutes);
 
 export default router;

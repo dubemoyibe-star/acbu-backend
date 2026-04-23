@@ -14,6 +14,10 @@ const createTransferSchema = z.object({
       message:
         "amount_acbu must be a positive number with up to 7 decimal places",
     }),
+  blockchain_tx_hash: z
+    .string()
+    .regex(/^[a-fA-F0-9]{64}$/, "blockchain_tx_hash must be a 64-char hex hash")
+    .optional(),
 });
 
 /**
@@ -38,7 +42,10 @@ export async function postTransfers(
         to: body.to.trim(),
         amountAcbu: body.amount_acbu.trim(),
       },
-      // getSenderSigningKey not passed: tx stays pending until key/worker is wired
+      {
+        // Legacy behavior: without hash, tx stays pending until key/worker is wired.
+        submittedBlockchainTxHash: body.blockchain_tx_hash,
+      },
     );
     res.status(201).json({
       transaction_id: result.transactionId,
@@ -58,12 +65,6 @@ export async function postTransfers(
     }
     if (e instanceof Error && e.message === "Cannot transfer to yourself") {
       return next(new AppError(e.message, 400));
-    }
-    if (
-      e instanceof Error &&
-      e.message.includes("KYC required to make payments")
-    ) {
-      return next(new AppError(e.message, 403));
     }
     next(e);
   }
@@ -102,14 +103,27 @@ export async function getTransfers(
     const { limit, cursor } = query.data;
 
     const list = await prisma.transaction.findMany({
-      where: { userId, type: "transfer" },
+      where: {
+        userId,
+        OR: [
+          { type: "transfer" },
+          // Faucet drips are recorded as completed mint tx rows with this source marker.
+          {
+            type: "mint",
+            rateSnapshot: { path: ["source"], equals: "admin_drip_demo_fiat" },
+          },
+        ],
+      },
       orderBy: { createdAt: "desc" },
       take: limit + 1, // fetch one extra to determine if there's a next page
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
       select: {
         id: true,
+        type: true,
         status: true,
         acbuAmount: true,
+        localCurrency: true,
+        localAmount: true,
         recipientAddress: true,
         blockchainTxHash: true,
         createdAt: true,
@@ -123,8 +137,11 @@ export async function getTransfers(
 
     const items = page.map((t: (typeof page)[number]) => ({
       transaction_id: t.id,
+      type: t.type,
       status: t.status,
       amount_acbu: t.acbuAmount?.toString() ?? null,
+      local_currency: t.localCurrency ?? null,
+      local_amount: t.localAmount?.toString() ?? null,
       blockchain_tx_hash: t.blockchainTxHash ?? undefined,
       created_at: t.createdAt.toISOString(),
       completed_at: t.completedAt?.toISOString() ?? undefined,
@@ -142,7 +159,7 @@ export async function getTransfers(
 
 /**
  * GET /transfers/:id
- * Transfer details; optionally exposes blockchain_tx_hash for advanced/support.
+ * Transfer/faucet details; optionally exposes blockchain_tx_hash for advanced/support.
  */
 export async function getTransferById(
   req: AuthRequest,
@@ -156,11 +173,24 @@ export async function getTransferById(
     }
     const { id } = req.params;
     const tx = await prisma.transaction.findFirst({
-      where: { id, userId, type: "transfer" },
+      where: {
+        id,
+        userId,
+        OR: [
+          { type: "transfer" },
+          {
+            type: "mint",
+            rateSnapshot: { path: ["source"], equals: "admin_drip_demo_fiat" },
+          },
+        ],
+      },
       select: {
         id: true,
+        type: true,
         status: true,
         acbuAmount: true,
+        localCurrency: true,
+        localAmount: true,
         recipientAddress: true,
         blockchainTxHash: true,
         createdAt: true,
@@ -172,9 +202,13 @@ export async function getTransferById(
     }
     res.json({
       transaction_id: tx.id,
+      type: tx.type,
       status: tx.status,
       amount_acbu: tx.acbuAmount?.toString() ?? null,
-      recipient_address: undefined, // hide in default
+      local_currency: tx.localCurrency ?? null,
+      local_amount: tx.localAmount?.toString() ?? null,
+      recipient_address:
+        tx.type === "transfer" ? (tx.recipientAddress ?? null) : null,
       blockchain_tx_hash: tx.blockchainTxHash ?? undefined,
       created_at: tx.createdAt.toISOString(),
       completed_at: tx.completedAt?.toISOString() ?? undefined,

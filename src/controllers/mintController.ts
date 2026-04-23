@@ -7,6 +7,7 @@ import { z } from "zod";
 import { prisma } from "../config/database";
 import { getContractAddresses } from "../config/contracts";
 import { acbuMintingService } from "../services/contracts";
+import { stellarClient } from "../services/stellar/client";
 import { AuthRequest } from "../middleware/auth";
 import { Decimal } from "@prisma/client/runtime/library";
 import { logAudit } from "../services/audit";
@@ -37,6 +38,26 @@ const usdcBodySchema = z.object({
   currency_preference: z.enum(["auto"]).optional(),
 });
 
+async function assertUserWalletAddress(
+  userId: string,
+  providedAddress: string,
+): Promise<string> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { stellarAddress: true },
+  });
+
+  if (!user?.stellarAddress) {
+    throw new AppError("User wallet address not set", 400);
+  }
+
+  if (user.stellarAddress !== providedAddress) {
+    throw new AppError("Wallet address does not match user", 403);
+  }
+
+  return user.stellarAddress;
+}
+
 /**
  * POST /v1/mint/usdc - Accept USDC deposit. We convert USDC→XLM in backend (pools/swaps independent); once conversion succeeds, mint is approved. User does not wait for LPs.
  */
@@ -58,6 +79,10 @@ export async function mintFromUsdc(
       return;
     }
     const { usdc_amount, wallet_address } = parsed.data;
+    const userWalletAddress = await assertUserWalletAddress(
+      userId,
+      wallet_address,
+    );
     const usdcNum = Number(usdc_amount);
     // SECURITY: Always enforce circuit breaker and deposit limits
     // Previously these checks were skipped when req.audience was undefined,
@@ -85,7 +110,7 @@ export async function mintFromUsdc(
     const swap = await prisma.onRampSwap.create({
       data: {
         userId,
-        stellarAddress: wallet_address,
+        stellarAddress: userWalletAddress,
         source: "usdc_deposit",
         usdcAmount: new Decimal(usdcNum),
         xlmAmount: null,
@@ -131,8 +156,34 @@ export async function mintFromUsdcInternal(
     },
   });
   const addresses = getContractAddresses();
-  if (addresses.minting) {
+  if (!addresses.minting) {
+    await prisma.transaction.update({
+      where: { id: tx.id },
+      data: {
+        status: "failed",
+        rateSnapshot: { error: "CONTRACT_MINTING not configured" },
+      },
+    });
+    throw new Error("Minting contract address not configured");
+  }
+
+  const sourceAccount = stellarClient.getKeypair()?.publicKey();
+  if (!sourceAccount) {
+    await prisma.transaction.update({
+      where: { id: tx.id },
+      data: {
+        status: "failed",
+        rateSnapshot: {
+          error: "No Stellar source account (STELLAR_SECRET_KEY)",
+        },
+      },
+    });
+    throw new Error("No source account available");
+  }
+
+  try {
     const result = await acbuMintingService.mintFromUsdc({
+      user: sourceAccount,
       usdcAmount: usdcAmount7,
       recipient: walletAddress,
     });
@@ -147,8 +198,18 @@ export async function mintFromUsdcInternal(
       },
     });
     return { transactionId: tx.id, acbuAmount: acbuNum };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("Soroban mint_from_usdc failed:", message);
+    await prisma.transaction.update({
+      where: { id: tx.id },
+      data: {
+        status: "failed",
+        rateSnapshot: { error: message, at: new Date().toISOString() },
+      },
+    });
+    throw err;
   }
-  return { transactionId: tx.id, acbuAmount: 0 };
 }
 
 const depositBodySchema = z.object({
@@ -198,6 +259,9 @@ export async function depositFromBasketCurrency(
       return;
     }
     const amountNum = Number(amount);
+    if (req.apiKey?.userId) {
+      await assertUserWalletAddress(req.apiKey.userId, wallet_address);
+    }
     // SECURITY: Always enforce circuit breaker and deposit limits
     // Previously these checks were skipped when req.audience was undefined,
     // allowing bypass of critical financial controls via direct /mint/deposit route

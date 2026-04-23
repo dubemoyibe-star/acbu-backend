@@ -1,17 +1,52 @@
+import { xdr } from "@stellar/stellar-sdk";
 import { contractClient, ContractClient } from "../stellar/contractClient";
 import { stellarClient } from "../stellar/client";
 import { logger } from "../../config/logger";
 
-export interface MintFromUsdcParams {
-  usdcAmount: string; // Amount in smallest unit (7 decimals)
-  recipient: string; // Stellar address
+/** Soroban `CurrencyCode` — tuple struct with one string field. */
+function currencyCodeToScVal(code: string): xdr.ScVal {
+  const c = code.trim().toUpperCase();
+  if (c.length !== 3) {
+    throw new Error("currency must be a 3-letter ISO code");
+  }
+  // CurrencyCode is a tuple-struct with a single field:
+  //   CurrencyCode(pub Vec<String>)
+  // Soroban encodes contracttype structs as an ScVal::Vec of fields, so we need:
+  //   vec([ vec([ string("NGN") ]) ])
+  return xdr.ScVal.scvVec([xdr.ScVal.scvVec([xdr.ScVal.scvString(c)])]);
 }
 
-export interface MintFromFiatParams {
-  currency: string; // Currency code (NGN, KES, RWF)
-  amount: string; // Amount in smallest unit
-  recipient: string; // Stellar address
-  fintechTxId: string; // Fintech transaction ID
+export interface MintFromUsdcParams {
+  user: string; // The caller/payer address
+  usdcAmount: string; // Amount in smallest unit (7 decimals)
+  recipient: string; // Stellar address to receive ACBU
+}
+
+export interface MintFromBasketParams {
+  user: string;
+  recipient: string;
+  acbuAmount: string;
+}
+
+export interface MintFromSingleParams {
+  user: string;
+  recipient: string;
+  currency: string;
+  sTokenAmount: string;
+}
+
+/** Custodial mint: operator key signs; pulls demo fiat from minting contract custody. */
+export interface MintFromDemoFiatParams {
+  operator: string;
+  recipient: string;
+  currency: string;
+  fiatAmount: string;
+}
+
+export interface AdminDripDemoFiatParams {
+  recipient: string;
+  currency: string;
+  amount: string;
 }
 
 export class MintingService {
@@ -38,14 +73,11 @@ export class MintingService {
         throw new Error("No source account available");
       }
 
-      // Convert amount to i128 (7 decimals)
-      const usdcAmount = BigInt(params.usdcAmount);
-      const recipient = params.recipient;
-
-      // Build function arguments
+      // Build function arguments: [user, usdc_amount, recipient]
       const args = [
-        ContractClient.toScVal(Number(usdcAmount)),
-        ContractClient.toScVal(recipient),
+        ContractClient.toScVal(params.user),
+        ContractClient.toScVal(BigInt(params.usdcAmount)),
+        ContractClient.toScVal(params.recipient),
       ];
 
       // Invoke contract
@@ -75,32 +107,31 @@ export class MintingService {
   }
 
   /**
-   * Mint ACBU from fiat deposit
+   * Mint ACBU from basket deposit
    */
-  async mintFromFiat(params: MintFromFiatParams): Promise<{
+  async mintFromBasket(params: MintFromBasketParams): Promise<{
     transactionHash: string;
     acbuAmount: string;
   }> {
     try {
-      logger.info("Minting ACBU from fiat", params);
+      logger.info("Minting ACBU from basket", params);
 
       const sourceAccount = stellarClient.getKeypair()?.publicKey();
       if (!sourceAccount) {
         throw new Error("No source account available");
       }
 
-      // Build function arguments
+      // Build function arguments: [user, recipient, acbu_amount]
       const args = [
-        ContractClient.toScVal(params.currency),
-        ContractClient.toScVal(params.amount),
+        ContractClient.toScVal(params.user),
         ContractClient.toScVal(params.recipient),
-        ContractClient.toScVal(params.fintechTxId),
+        ContractClient.toScVal(BigInt(params.acbuAmount)),
       ];
 
       // Invoke contract
       const result = await this.contractClient.invokeContract({
         contractId: this.contractId,
-        functionName: "mint_from_fiat",
+        functionName: "mint_from_basket",
         args,
         sourceAccount,
       });
@@ -108,7 +139,7 @@ export class MintingService {
       // Parse result
       const acbuAmount = ContractClient.fromScVal(result.result);
 
-      logger.info("Fiat minting successful", {
+      logger.info("Basket minting successful", {
         transactionHash: result.transactionHash,
         acbuAmount: acbuAmount.toString(),
       });
@@ -118,7 +149,137 @@ export class MintingService {
         acbuAmount: acbuAmount.toString(),
       };
     } catch (error) {
-      logger.error("Failed to mint from fiat", { params, error });
+      logger.error("Failed to mint from basket", { params, error });
+      throw error;
+    }
+  }
+
+  /**
+   * Mint ACBU from single S-token deposit
+   */
+  async mintFromSingle(params: MintFromSingleParams): Promise<{
+    transactionHash: string;
+    acbuAmount: string;
+  }> {
+    try {
+      logger.info("Minting ACBU from single S-token", params);
+
+      const sourceAccount = stellarClient.getKeypair()?.publicKey();
+      if (!sourceAccount) {
+        throw new Error("No source account available");
+      }
+
+      // Build function arguments: [user, recipient, currency, s_token_amount]
+      const args = [
+        ContractClient.toScVal(params.user),
+        ContractClient.toScVal(params.recipient),
+        ContractClient.toScVal(params.currency),
+        ContractClient.toScVal(BigInt(params.sTokenAmount)),
+      ];
+
+      // Invoke contract
+      const result = await this.contractClient.invokeContract({
+        contractId: this.contractId,
+        functionName: "mint_from_single",
+        args,
+        sourceAccount,
+      });
+
+      // Parse result
+      const acbuAmount = ContractClient.fromScVal(result.result);
+
+      logger.info("Single minting successful", {
+        transactionHash: result.transactionHash,
+        acbuAmount: acbuAmount.toString(),
+      });
+
+      return {
+        transactionHash: result.transactionHash,
+        acbuAmount: acbuAmount.toString(),
+      };
+    } catch (error) {
+      logger.error("Failed to mint from single", { params, error });
+      throw error;
+    }
+  }
+
+  /**
+   * Custodial path: backend `operator` signs; contract pulls demo S-token from its own balance
+   * and mints ACBU to `recipient` (same pricing as `mint_from_single`).
+   */
+  async mintFromDemoFiat(params: MintFromDemoFiatParams): Promise<{
+    transactionHash: string;
+    acbuAmount: string;
+  }> {
+    try {
+      logger.info("Minting ACBU from custodial demo fiat", params);
+
+      const sourceAccount = stellarClient.getKeypair()?.publicKey();
+      if (!sourceAccount) {
+        throw new Error("No source account available");
+      }
+
+      const args = [
+        ContractClient.toScVal(params.operator),
+        ContractClient.toScVal(params.recipient),
+        currencyCodeToScVal(params.currency),
+        ContractClient.bigIntToI128(BigInt(params.fiatAmount)),
+      ];
+
+      const result = await this.contractClient.invokeContract({
+        contractId: this.contractId,
+        functionName: "mint_from_demo_fiat",
+        args,
+        sourceAccount,
+      });
+
+      const acbuAmount = ContractClient.fromScVal(result.result);
+
+      logger.info("Custodial demo fiat mint successful", {
+        transactionHash: result.transactionHash,
+        acbuAmount: acbuAmount.toString(),
+      });
+
+      return {
+        transactionHash: result.transactionHash,
+        acbuAmount: acbuAmount.toString(),
+      };
+    } catch (error) {
+      logger.error("Failed mint_from_demo_fiat", { params, error });
+      throw error;
+    }
+  }
+
+  /**
+   * Admin-only: send demo basket S-token from minting contract custody to a user (testnet faucet).
+   */
+  async adminDripDemoFiat(params: AdminDripDemoFiatParams): Promise<{
+    transactionHash: string;
+  }> {
+    try {
+      logger.info("admin_drip_demo_fiat", params);
+
+      const sourceAccount = stellarClient.getKeypair()?.publicKey();
+      if (!sourceAccount) {
+        throw new Error("No source account available");
+      }
+
+      const args = [
+        ContractClient.toScVal(params.recipient),
+        currencyCodeToScVal(params.currency),
+        ContractClient.bigIntToI128(BigInt(params.amount)),
+      ];
+
+      const result = await this.contractClient.invokeContract({
+        contractId: this.contractId,
+        functionName: "admin_drip_demo_fiat",
+        args,
+        sourceAccount,
+      });
+
+      return { transactionHash: result.transactionHash };
+    } catch (error) {
+      logger.error("Failed admin_drip_demo_fiat", { params, error });
       throw error;
     }
   }

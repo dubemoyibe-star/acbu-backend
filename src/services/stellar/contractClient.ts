@@ -1,7 +1,44 @@
-import { TransactionBuilder, Operation, xdr } from "stellar-sdk";
+import {
+  TransactionBuilder,
+  Operation,
+  xdr,
+  Address,
+  rpc,
+} from "@stellar/stellar-sdk";
 import { stellarClient } from "./client";
 import { getBaseFee } from "./feeManager";
 import { logger } from "../../config/logger";
+import { wrapSorobanInvokeError } from "./sorobanInvokeErrors";
+
+function isRetryableSorobanNetworkError(message: string): boolean {
+  return /ENOTFOUND|ECONNRESET|ETIMEDOUT|ECONNREFUSED|fetch failed|socket hang up/i.test(
+    message,
+  );
+}
+
+async function simulateTransactionWithRetry(
+  rpcServer: rpc.Server,
+  transaction: Parameters<rpc.Server["simulateTransaction"]>[0],
+  logCtx: Record<string, unknown>,
+): Promise<rpc.Api.SimulateTransactionResponse> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await rpcServer.simulateTransaction(transaction);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!isRetryableSorobanNetworkError(msg) || attempt === 3) {
+        throw e;
+      }
+      logger.warn("Soroban simulateTransaction failed (retrying)", {
+        ...logCtx,
+        attempt,
+        message: msg,
+      });
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
+    }
+  }
+  throw new Error("simulateTransactionWithRetry: exhausted retries");
+}
 
 export interface ContractCallOptions {
   contractId: string;
@@ -18,12 +55,27 @@ export interface ContractInvokeResult {
 }
 
 export class ContractClient {
-  private server: ReturnType<typeof stellarClient.getServer>;
+  // private server: ReturnType<typeof stellarClient.getServer>;
   private networkPassphrase: string;
 
   constructor() {
-    this.server = stellarClient.getServer();
+    // this.server = stellarClient.getServer();
     this.networkPassphrase = stellarClient.getNetworkPassphrase();
+  }
+
+  /**
+   * Helper to convert BigInt to ScVal i128
+   */
+  static bigIntToI128(value: bigint): xdr.ScVal {
+    const b = BigInt(value);
+    const lo = b & BigInt("0xFFFFFFFFFFFFFFFF");
+    const hi = b >> BigInt(64);
+    return xdr.ScVal.scvI128(
+      new xdr.Int128Parts({
+        lo: xdr.Uint64.fromString(lo.toString()),
+        hi: xdr.Int64.fromString(hi.toString()),
+      }),
+    );
   }
 
   /**
@@ -41,66 +93,143 @@ export class ContractClient {
         sourceAccount,
       });
 
-      // Build invoke contract operation (stellar-sdk type shape varies by version)
-      const invokeOp = (
-        Operation.invokeHostFunction as (opts: unknown) => unknown
-      )({
-        function: (
-          xdr.HostFunction as unknown as {
-            hostFunctionTypeInvokeContract: unknown;
-          }
-        ).hostFunctionTypeInvokeContract,
-        parameters: [
-          xdr.ScVal.scvAddress(
-            xdr.ScAddress.scAddressTypeContract(
-              (
-                xdr as unknown as {
-                  ContractId: { fromXdr: (s: string) => Buffer };
-                }
-              ).ContractId.fromXdr(contractId),
-            ),
-          ),
-          xdr.ScVal.scvSymbol(functionName),
-          ...args,
-        ],
+      const invokeOp = Operation.invokeHostFunction({
+        func: xdr.HostFunction.hostFunctionTypeInvokeContract(
+          new xdr.InvokeContractArgs({
+            contractAddress: Address.fromString(contractId).toScAddress(),
+            functionName: xdr.ScVal.scvSymbol(functionName).sym()!,
+            args,
+          }),
+        ),
       });
 
-      // Build transaction
       const sourceAccountObj = await stellarClient.getAccount(sourceAccount);
       const builder = new TransactionBuilder(sourceAccountObj, {
         fee: fee || (await getBaseFee()),
         networkPassphrase: this.networkPassphrase,
       });
+      builder.setTimeout(0);
 
-      builder.addOperation(
-        invokeOp as Parameters<typeof builder.addOperation>[0],
+      builder.addOperation(invokeOp);
+      let transaction = builder.build();
+
+      const rpcServer = new rpc.Server(stellarClient.getSorobanRpcUrl());
+      // Simulate first so we can attach Soroban auth + resource footprint/fees.
+      // This is required for contracts that call `require_auth()` (admin/validator gated).
+      const simulation = await simulateTransactionWithRetry(
+        rpcServer,
+        transaction,
+        {
+          contractId,
+          functionName,
+        },
       );
-      const transaction = builder.build();
+      if (rpc.Api.isSimulationError(simulation)) {
+        throw new Error(`Simulation error: ${simulation.error}`);
+      }
+      transaction = rpc
+        .assembleTransaction(transaction, simulation)
+        .setTimeout(0)
+        .build();
 
-      // Sign transaction (if keypair is available)
       const keypair = stellarClient.getKeypair();
       if (keypair) {
         transaction.sign(keypair);
       }
 
-      // Submit transaction
-      const result = await stellarClient.submitTransaction(transaction);
+      // IMPORTANT: Soroban transactions should be submitted to the Soroban RPC,
+      // not Horizon `/transactions` (which can 504 on long-running Soroban TXs).
+      let send: any;
+      let lastSendError: unknown;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          send = await rpcServer.sendTransaction(transaction);
+          break;
+        } catch (e) {
+          lastSendError = e;
+          const msg = e instanceof Error ? e.message : String(e);
+          logger.warn("Soroban RPC sendTransaction failed (retrying)", {
+            contractId,
+            functionName,
+            attempt,
+            message: msg,
+          });
+          if (attempt < 3) {
+            await new Promise((r) => setTimeout(r, 1500 * attempt));
+          }
+        }
+      }
+      if (!send) {
+        throw lastSendError instanceof Error
+          ? lastSendError
+          : new Error(String(lastSendError));
+      }
+      const txHash = send.hash;
 
-      // Parse result from transaction
-      const resultXdr = this.parseTransactionResult(result);
-
-      return {
-        transactionHash: result.hash,
-        result: resultXdr,
-        ledger: result.ledger || 0,
-      };
+      // Poll until the transaction is confirmed.
+      const maxWaitMs = 120_000;
+      const start = Date.now();
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        let status: any;
+        try {
+          status = await rpcServer.getTransaction(txHash);
+        } catch (e) {
+          // Soroban testnet RPC can intermittently reset connections; treat as retryable while within maxWaitMs.
+          const msg = e instanceof Error ? e.message : String(e);
+          logger.warn("Soroban RPC getTransaction failed (retrying)", {
+            contractId,
+            functionName,
+            txHash,
+            message: msg,
+          });
+          if (Date.now() - start > maxWaitMs) {
+            throw e;
+          }
+          await new Promise((r) => setTimeout(r, 2000));
+          continue;
+        }
+        if (status.status === "SUCCESS") {
+          // For Soroban invocations the real contract return value is carried
+          // in `TransactionMeta.sorobanMeta.returnValue`, which the RPC exposes
+          // directly as `status.returnValue` (already parsed to xdr.ScVal).
+          // The `InvokeHostFunctionResult.success()` arm in `TransactionResult`
+          // is only the hash of emitted diagnostic events — not the return
+          // value. Prefer `returnValue`; fall back to TransactionResult parsing
+          // for non-Soroban paths or older RPC responses.
+          let resultScVal: xdr.ScVal;
+          if (status.returnValue) {
+            resultScVal = status.returnValue as xdr.ScVal;
+          } else {
+            resultScVal = this.parseTransactionResult(status);
+          }
+          return {
+            transactionHash: txHash,
+            result: resultScVal,
+            ledger: status.ledger ?? 0,
+          };
+        }
+        if (status.status === "FAILED") {
+          throw new Error(
+            `Soroban transaction failed: ${status.resultXdr ?? "unknown result"}`,
+          );
+        }
+        if (Date.now() - start > maxWaitMs) {
+          throw new Error(`Soroban transaction timed out after ${maxWaitMs}ms`);
+        }
+        await new Promise((r) => setTimeout(r, 1500));
+      }
     } catch (error) {
       logger.error("Failed to invoke contract", {
         contractId: options.contractId,
         functionName: options.functionName,
         error,
+        message: error instanceof Error ? error.message : String(error),
       });
-      throw error;
+      throw wrapSorobanInvokeError(error, {
+        contractId: options.contractId,
+        functionName: options.functionName,
+      });
     }
   }
 
@@ -115,35 +244,19 @@ export class ContractClient {
     try {
       logger.info("Reading contract data", { contractId, functionName });
 
-      // For read operations, we can use simulateTransaction
-      // This is a simplified version - in production, use proper simulation
       const sourceAccount = stellarClient.getKeypair()?.publicKey();
       if (!sourceAccount) {
         throw new Error("No source account available for contract read");
       }
 
-      // Build invoke operation
-      const invokeOp = (
-        Operation.invokeHostFunction as (opts: unknown) => unknown
-      )({
-        function: (
-          xdr.HostFunction as unknown as {
-            hostFunctionTypeInvokeContract: unknown;
-          }
-        ).hostFunctionTypeInvokeContract,
-        parameters: [
-          xdr.ScVal.scvAddress(
-            xdr.ScAddress.scAddressTypeContract(
-              (
-                xdr as unknown as {
-                  ContractId: { fromXdr: (s: string) => Buffer };
-                }
-              ).ContractId.fromXdr(contractId),
-            ),
-          ),
-          xdr.ScVal.scvSymbol(functionName),
-          ...args,
-        ],
+      const invokeOp = Operation.invokeHostFunction({
+        func: xdr.HostFunction.hostFunctionTypeInvokeContract(
+          new xdr.InvokeContractArgs({
+            contractAddress: Address.fromString(contractId).toScAddress(),
+            functionName: xdr.ScVal.scvSymbol(functionName).sym()!,
+            args,
+          }),
+        ),
       });
 
       const sourceAccountObj = await stellarClient.getAccount(sourceAccount);
@@ -151,27 +264,31 @@ export class ContractClient {
         fee: await getBaseFee(),
         networkPassphrase: this.networkPassphrase,
       });
+      builder.setTimeout(0);
 
-      builder.addOperation(
-        invokeOp as Parameters<typeof builder.addOperation>[0],
-      );
+      builder.addOperation(invokeOp);
       const transaction = builder.build();
 
-      // Simulate transaction (read-only)
-      const simulation = await (
-        this.server as unknown as {
-          simulateTransaction: (
-            tx: unknown,
-          ) => Promise<{ error?: string; result?: unknown }>;
-        }
-      ).simulateTransaction(transaction);
+      const rpcServer = new rpc.Server(stellarClient.getSorobanRpcUrl());
+      const simulation = await simulateTransactionWithRetry(
+        rpcServer,
+        transaction,
+        {
+          contractId,
+          functionName,
+        },
+      );
 
-      if (simulation.error) {
+      if (rpc.Api.isSimulationError(simulation)) {
         throw new Error(`Simulation error: ${simulation.error}`);
       }
 
-      // Parse result
-      return this.parseSimulationResult(simulation as { result?: unknown });
+      // If it's a success, it will have a result
+      if (rpc.Api.isSimulationSuccess(simulation)) {
+        return simulation.result!.retval;
+      }
+
+      throw new Error("Simulation neither error nor success");
     } catch (error) {
       logger.error("Failed to read contract", {
         contractId,
@@ -186,21 +303,40 @@ export class ContractClient {
    * Parse transaction result
    */
   private parseTransactionResult(result: any): xdr.ScVal {
-    // Extract result from transaction result
-    // This is a simplified version - actual implementation depends on transaction structure
     try {
-      if (result.result_xdr) {
+      const rawResultXdr =
+        // Horizon shape
+        result?.result_xdr ??
+        // Soroban RPC `getTransaction` shape
+        result?.resultXdr ??
+        result?.result_xdr;
+
+      if (rawResultXdr) {
+        // Newer stellar-sdk versions may already parse `resultXdr` into an XDR struct.
+        // Normalize into a base64 string for `fromXDR`.
+        const resultXdrBase64: string =
+          typeof rawResultXdr === "string"
+            ? rawResultXdr
+            : typeof rawResultXdr?.toXDR === "function"
+              ? rawResultXdr.toXDR("base64")
+              : Buffer.isBuffer(rawResultXdr)
+                ? rawResultXdr.toString("base64")
+                : String(rawResultXdr);
+
         const txResult = xdr.TransactionResult.fromXDR(
-          result.result_xdr,
+          resultXdrBase64,
           "base64",
         );
-        const operations = txResult.result().results();
-        if (operations.length > 0) {
-          const opResult = operations[0].tr().invokeHostFunctionResult();
-          if (opResult) {
-            return (
-              opResult.success() as unknown as { returnValue: () => xdr.ScVal }
-            ).returnValue();
+        const results = txResult.result().results();
+        if (results.length > 0) {
+          const tr = results[0].tr();
+          // Check for host function success
+          const opResult = tr.invokeHostFunctionResult();
+          if (
+            opResult.switch() ===
+            xdr.InvokeHostFunctionResultCode.invokeHostFunctionSuccess()
+          ) {
+            return opResult.success() as unknown as xdr.ScVal;
           }
         }
       }
@@ -212,36 +348,21 @@ export class ContractClient {
   }
 
   /**
-   * Parse simulation result
-   */
-  private parseSimulationResult(simulation: any): xdr.ScVal {
-    try {
-      if (simulation.result) {
-        return simulation.result.returnValue;
-      }
-      throw new Error("Could not parse simulation result");
-    } catch (error) {
-      logger.error("Failed to parse simulation result", { error });
-      throw error;
-    }
-  }
-
-  /**
    * Convert JavaScript value to ScVal
    */
   static toScVal(value: any): xdr.ScVal {
     if (typeof value === "string") {
+      try {
+        // Try to parse as Address if it looks like one
+        if (/^[GC][A-Z2-7]{55}$/.test(value)) {
+          return xdr.ScVal.scvAddress(Address.fromString(value).toScAddress());
+        }
+      } catch (e) {
+        // Fallback to string if parsing fails
+      }
       return xdr.ScVal.scvString(value);
-    } else if (typeof value === "number") {
-      return xdr.ScVal.scvI128(
-        new (xdr.Int128Parts as unknown as new (arg: {
-          hi: unknown;
-          lo: unknown;
-        }) => unknown)({
-          hi: xdr.Int64.fromString(Math.floor(value / 2 ** 64).toString()),
-          lo: xdr.Uint64.fromString((value % 2 ** 64).toString()),
-        }) as xdr.Int128Parts,
-      );
+    } else if (typeof value === "number" || typeof value === "bigint") {
+      return ContractClient.bigIntToI128(BigInt(value));
     } else if (typeof value === "boolean") {
       return xdr.ScVal.scvBool(value);
     } else if (value instanceof Uint8Array) {
@@ -268,17 +389,18 @@ export class ContractClient {
       case xdr.ScValType.scvI32():
         return scVal.i32();
       case xdr.ScValType.scvU64():
-        return scVal.u64().toString();
+        return scVal.u64().toBigInt().toString();
       case xdr.ScValType.scvI64():
-        return scVal.i64().toString();
+        return scVal.i64().toBigInt().toString();
       case xdr.ScValType.scvU128():
-        return scVal.u128().toString();
       case xdr.ScValType.scvI128(): {
-        const parts = scVal.i128();
-        return (
-          BigInt(parts.hi().toString()) * BigInt(2 ** 64) +
-          BigInt(parts.lo().toString())
-        );
+        const parts =
+          scVal.switch() === xdr.ScValType.scvU128()
+            ? scVal.u128()
+            : scVal.i128();
+        const lo = parts.lo().toBigInt();
+        const hi = parts.hi().toBigInt();
+        return (hi << BigInt(64)) | lo;
       }
       case xdr.ScValType.scvString():
         return scVal.str().toString();
@@ -288,8 +410,10 @@ export class ContractClient {
         return (scVal.vec() ?? []).map((v: xdr.ScVal) =>
           ContractClient.fromScVal(v),
         );
+      case xdr.ScValType.scvAddress():
+        return Address.fromScVal(scVal).toString();
       default:
-        throw new Error(`Unsupported ScVal type: ${scVal.switch()}`);
+        return scVal;
     }
   }
 }

@@ -38,6 +38,7 @@ export type SigninResult =
       wallet_created?: boolean;
       passphrase?: string;
       encryption_method_required?: boolean;
+      stellar_address?: string | null;
     };
 
 export interface Verify2faParams {
@@ -51,6 +52,7 @@ export interface Verify2faResult {
   wallet_created?: boolean;
   passphrase?: string;
   encryption_method_required?: boolean;
+  stellar_address?: string | null;
 }
 
 const OTP_EXPIRY_MINUTES = 10;
@@ -75,27 +77,6 @@ function normalizeIdentifier(s: string): {
 
 function generateOtpCode(): string {
   return String(Math.floor(100000 + Math.random() * 900000));
-}
-
-async function publishOtpToQueue(payload: {
-  channel: string;
-  to: string;
-  code: string;
-}): Promise<void> {
-  try {
-    const ch = getRabbitMQChannel();
-    await ch.assertQueue(QUEUES.OTP_SEND, { durable: true });
-    ch.sendToQueue(QUEUES.OTP_SEND, Buffer.from(JSON.stringify(payload)), {
-      persistent: true,
-    });
-    logger.debug("OTP published to queue", {
-      channel: payload.channel,
-      to: payload.to ? "***" : undefined,
-    });
-  } catch (e) {
-    logger.error("Failed to publish OTP to RabbitMQ", e);
-    throw new Error("OTP delivery unavailable");
-  }
 }
 
 /**
@@ -206,7 +187,24 @@ export async function signin(params: SigninParams): Promise<SigninResult> {
           expiresAt: new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000),
         },
       });
-      await publishOtpToQueue({ channel: user.twoFaMethod, to, code });
+
+      try {
+        const ch = getRabbitMQChannel();
+        await ch.assertQueue(QUEUES.OTP_SEND, { durable: true });
+        ch.sendToQueue(
+          QUEUES.OTP_SEND,
+          Buffer.from(JSON.stringify({ channel: user.twoFaMethod, to, code })),
+          {
+            persistent: true,
+          },
+        );
+        logger.debug("OTP published to queue", {
+          channel: user.twoFaMethod,
+          to: to ? "***" : undefined,
+        });
+      } catch (err) {
+        logger.error("Skipping OTP send due to RabbitMQ error", err);
+      }
     }
     const challenge_token = signChallengeToken(user.id);
     await logAudit({
@@ -225,6 +223,11 @@ export async function signin(params: SigninParams): Promise<SigninResult> {
 
   const api_key = await generateApiKey(user.id, []);
   const wallet = await ensureWalletForUser(user.id);
+  const userFull = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { stellarAddress: true },
+  });
+
   await logAudit({
     eventType: "auth",
     entityType: "user",
@@ -239,7 +242,8 @@ export async function signin(params: SigninParams): Promise<SigninResult> {
     wallet_created?: boolean;
     passphrase?: string;
     encryption_method_required?: boolean;
-  } = { api_key, user_id: user.id };
+    stellar_address?: string | null;
+  } = { api_key, user_id: user.id, stellar_address: userFull?.stellarAddress };
   if (wallet.wallet_created && wallet.passphrase) {
     out.wallet_created = true;
     out.passphrase = wallet.passphrase;
@@ -297,6 +301,11 @@ export async function verify2fa(
 
   const api_key = await generateApiKey(user.id, []);
   const wallet = await ensureWalletForUser(user.id);
+  const userFull = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { stellarAddress: true },
+  });
+
   await logAudit({
     eventType: "auth",
     entityType: "user",
@@ -311,7 +320,8 @@ export async function verify2fa(
     wallet_created?: boolean;
     passphrase?: string;
     encryption_method_required?: boolean;
-  } = { api_key, user_id: user.id };
+    stellar_address?: string | null;
+  } = { api_key, user_id: user.id, stellar_address: userFull?.stellarAddress };
   if (wallet.wallet_created && wallet.passphrase) {
     out.wallet_created = true;
     out.passphrase = wallet.passphrase;

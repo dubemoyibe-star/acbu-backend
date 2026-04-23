@@ -79,6 +79,7 @@ export async function disconnectRabbitMQ(): Promise<void> {
 
 export function getRabbitMQChannel(): Channel {
   if (!channel) {
+    logger.warn("RabbitMQ not connected, throwing error on channel request");
     throw new Error("RabbitMQ not connected. Call connectRabbitMQ() first.");
   }
   return channel;
@@ -98,10 +99,6 @@ export const QUEUES = {
   OTP_SEND_DLQ: "otp_send_dlq",
   WEBHOOKS: "webhooks",
   WEBHOOKS_DLQ: "webhooks_dlq", // failed webhook deliveries for retry
-  KYC_PROCESSING: "kyc_processing",
-  KYC_PROCESSING_DLQ: "kyc_processing_dlq",
-  WALLET_ACTIVATION: "wallet_activation", // send XLM to user wallet when KYC fee paid
-  WALLET_ACTIVATION_DLQ: "wallet_activation_dlq",
   ACBU_SAVINGS_VAULT_EVENTS: "acbu_savings_vault_events",
   ACBU_SAVINGS_VAULT_EVENTS_DLQ: "acbu_savings_vault_events_dlq",
   ACBU_LENDING_POOL_EVENTS: "acbu_lending_pool_events",
@@ -111,8 +108,8 @@ export const QUEUES = {
   XLM_TO_ACBU: "xlm_to_acbu", // XLM deposit: sell XLM and mint ACBU to user
   XLM_TO_ACBU_DLQ: "xlm_to_acbu_dlq",
   USDC_CONVERT_AND_MINT: "usdc_convert_and_mint", // USDC deposit: convert USDC→XLM (backend), then mint
-  USDC_CONVERT_AND_MINT_DLQ: "usdc_convert_and_mint_dlq",
   AUDIT_LOGS: "audit_logs",
+  USDC_CONVERT_AND_MINT_DLQ: "usdc_convert_and_mint_dlq",
   AUDIT_LOGS_DLQ: "audit_logs_dlq",
 } as const;
 

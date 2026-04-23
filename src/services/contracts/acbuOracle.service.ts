@@ -3,6 +3,7 @@ import { stellarClient } from "../stellar/client";
 import { logger } from "../../config/logger";
 
 export interface UpdateRateParams {
+  validator: string; // The validator address
   currency: string; // Currency code (NGN, KES, RWF)
   rate: string; // Rate in 7 decimals
   sources: string[]; // Source rates for median calculation
@@ -30,18 +31,16 @@ export class OracleService {
         throw new Error("No source account available");
       }
 
-      // Build function arguments
-      const args = [
-        ContractClient.toScVal(params.currency),
-        ContractClient.toScVal(params.rate),
-        ContractClient.toScVal(params.sources),
-        ContractClient.toScVal(params.timestamp),
-      ];
+      // Custodial MVP: use admin override to reliably write rates on-chain.
+      // This avoids validator-path failures while still populating the same on-chain `rates`
+      // storage read by minting flows.
+      const currencyScVal = ContractClient.toScVal([[params.currency]]);
+      const args = [currencyScVal, ContractClient.toScVal(BigInt(params.rate))];
 
       // Invoke contract
       const result = await this.contractClient.invokeContract({
         contractId: this.contractId,
-        functionName: "update_rate",
+        functionName: "set_rate_admin",
         args,
         sourceAccount,
       });
@@ -66,7 +65,7 @@ export class OracleService {
       const result = await this.contractClient.readContract(
         this.contractId,
         "get_rate",
-        [ContractClient.toScVal(currency)],
+        [ContractClient.toScVal([[currency]])],
       );
 
       const rate = ContractClient.fromScVal(result);

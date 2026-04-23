@@ -1,4 +1,3 @@
-// Prisma schema for ACBU platform
 generator client {
   provider = "prisma-client-js"
 }
@@ -124,10 +123,10 @@ model Reserve {
   timestamp       DateTime  @default(now()) @db.Timestamp(6)
 
   @@unique([currency, segment, timestamp])
-  @@index([currency], name: "idx_reserves_currency")
-  @@index([segment], name: "idx_reserves_segment")
-  @@index([timestamp], name: "idx_reserves_timestamp")
-  @@index([currency, segment, timestamp(sort: Desc)], name: "idx_reserves_currency_segment_timestamp")
+  @@index([currency], map: "idx_reserves_currency")
+  @@index([segment], map: "idx_reserves_segment")
+  @@index([timestamp], map: "idx_reserves_timestamp")
+  @@index([currency, segment, timestamp(sort: Desc)], map: "idx_reserves_currency_segment_timestamp")
   @@map("reserves")
 }
 
@@ -163,30 +162,30 @@ model OracleRate {
   timestamp           DateTime  @default(now()) @db.Timestamp(6)
 
   @@unique([currency, timestamp])
-  @@index([currency], name: "idx_oracle_rates_currency")
-  @@index([timestamp], name: "idx_oracle_rates_timestamp")
+  @@index([currency], map: "idx_oracle_rates_currency")
+  @@index([timestamp], map: "idx_oracle_rates_timestamp")
   @@map("oracle_rates")
 }
 
 model AcbuRate {
-  id          String    @id @default(uuid()) @db.Uuid
-  acbuUsd     Decimal   @map("acbu_usd") @db.Decimal(20, 8)
-  acbuEur     Decimal?  @map("acbu_eur") @db.Decimal(20, 8)
-  acbuGbp     Decimal?  @map("acbu_gbp") @db.Decimal(20, 8)
-  acbuNgn     Decimal?  @map("acbu_ngn") @db.Decimal(20, 2)
-  acbuKes     Decimal?  @map("acbu_kes") @db.Decimal(20, 2)
-  acbuZar     Decimal?  @map("acbu_zar") @db.Decimal(20, 2)
-  acbuRwf     Decimal?  @map("acbu_rwf") @db.Decimal(20, 2)
-  acbuGhs     Decimal?  @map("acbu_ghs") @db.Decimal(20, 2)
-  acbuEgp     Decimal?  @map("acbu_egp") @db.Decimal(20, 2)
-  acbuMad     Decimal?  @map("acbu_mad") @db.Decimal(20, 2)
-  acbuTzs     Decimal?  @map("acbu_tzs") @db.Decimal(20, 2)
-  acbuUgx     Decimal?  @map("acbu_ugx") @db.Decimal(20, 2)
-  acbuXof     Decimal?  @map("acbu_xof") @db.Decimal(20, 2)
+  id           String   @id @default(uuid()) @db.Uuid
+  acbuUsd      Decimal  @map("acbu_usd") @db.Decimal(20, 8)
+  acbuEur      Decimal? @map("acbu_eur") @db.Decimal(20, 8)
+  acbuGbp      Decimal? @map("acbu_gbp") @db.Decimal(20, 8)
+  acbuNgn      Decimal? @map("acbu_ngn") @db.Decimal(20, 2)
+  acbuKes      Decimal? @map("acbu_kes") @db.Decimal(20, 2)
+  acbuZar      Decimal? @map("acbu_zar") @db.Decimal(20, 2)
+  acbuRwf      Decimal? @map("acbu_rwf") @db.Decimal(20, 2)
+  acbuGhs      Decimal? @map("acbu_ghs") @db.Decimal(20, 2)
+  acbuEgp      Decimal? @map("acbu_egp") @db.Decimal(20, 2)
+  acbuMad      Decimal? @map("acbu_mad") @db.Decimal(20, 2)
+  acbuTzs      Decimal? @map("acbu_tzs") @db.Decimal(20, 2)
+  acbuUgx      Decimal? @map("acbu_ugx") @db.Decimal(20, 2)
+  acbuXof      Decimal? @map("acbu_xof") @db.Decimal(20, 2)
   change24hUsd Decimal? @map("change_24h_usd") @db.Decimal(5, 2)
   timestamp   DateTime  @default(now()) @db.Timestamp(6)
 
-  @@index([timestamp], name: "idx_acbu_rates_timestamp")
+  @@index([timestamp], map: "idx_acbu_rates_timestamp")
   @@map("acbu_rates")
 }
 
@@ -203,8 +202,8 @@ model BasketMetrics {
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamp(6)
 
   @@unique([currency, period])
-  @@index([currency], name: "idx_basket_metrics_currency")
-  @@index([period], name: "idx_basket_metrics_period")
+  @@index([currency], map: "idx_basket_metrics_currency")
+  @@index([period], map: "idx_basket_metrics_period")
   @@map("basket_metrics")
 }
 
@@ -219,9 +218,9 @@ model BasketConfig {
   status        String    @db.VarChar(20) // proposed | approved | active
 
   @@unique([effectiveFrom, currency])
-  @@index([status], name: "idx_basket_config_status")
-  @@index([effectiveFrom], name: "idx_basket_config_effective_from")
-  @@index([status, effectiveFrom(sort: Desc)], name: "idx_basket_config_current")
+  @@index([status], map: "idx_basket_config_status")
+  @@index([effectiveFrom], map: "idx_basket_config_effective_from")
+  @@index([status, effectiveFrom(sort: Desc)], map: "idx_basket_config_current")
   @@map("basket_config")
 }
 
@@ -233,34 +232,34 @@ model RebalancingEvent {
   startedAt   DateTime  @default(now()) @map("started_at") @db.Timestamp(6)
   completedAt DateTime? @map("completed_at") @db.Timestamp(6)
 
-  @@index([type], name: "idx_rebalancing_events_type")
-  @@index([status], name: "idx_rebalancing_events_status")
-  @@index([startedAt], name: "idx_rebalancing_events_started_at")
+  @@index([type], map: "idx_rebalancing_events_type")
+  @@index([status], map: "idx_rebalancing_events_status")
+  @@index([startedAt], map: "idx_rebalancing_events_started_at")
   @@map("rebalancing_events")
 }
 
 model AuditTrail {
-  id          String    @id @default(uuid()) @db.Uuid
-  eventType   String    @map("event_type") @db.VarChar(50)
-  entityType  String?   @map("entity_type") @db.VarChar(50)
-  entityId    String?   @map("entity_id") @db.Uuid
-  action      String    @db.VarChar(50)
-  oldValue    Json?     @map("old_value")
-  newValue    Json?     @map("new_value")
+  id          String   @id @default(uuid()) @db.Uuid
+  eventType   String   @map("event_type") @db.VarChar(50)
+  entityType  String?  @map("entity_type") @db.VarChar(50)
+  entityId    String?  @map("entity_id") @db.Uuid
+  action      String   @db.VarChar(50)
+  oldValue    Json?    @map("old_value")
+  newValue    Json?    @map("new_value")
   performedBy String?  @map("performed_by") @db.Uuid
   timestamp   DateTime  @default(now()) @db.Timestamp(6)
 
-  @@index([eventType], name: "idx_audit_trail_event_type")
-  @@index([entityType], name: "idx_audit_trail_entity_type")
-  @@index([entityId], name: "idx_audit_trail_entity_id")
-  @@index([timestamp], name: "idx_audit_trail_timestamp")
+  @@index([eventType], map: "idx_audit_trail_event_type")
+  @@index([entityType], map: "idx_audit_trail_entity_type")
+  @@index([entityId], map: "idx_audit_trail_entity_id")
+  @@index([timestamp], map: "idx_audit_trail_timestamp")
   @@map("audit_trail")
 }
 
 model Webhook {
-  id            String      @id @default(uuid()) @db.Uuid
-  transactionId String?     @map("transaction_id") @db.Uuid
-  eventType     String      @map("event_type") @db.VarChar(50)
+  id            String       @id @default(uuid()) @db.Uuid
+  transactionId String?      @map("transaction_id") @db.Uuid
+  eventType     String       @map("event_type") @db.VarChar(50)
   payload       Json
   signature     String?     @db.VarChar(255)
   status        String      @default("pending") @db.VarChar(20)
@@ -270,8 +269,8 @@ model Webhook {
 
   transaction   Transaction? @relation(fields: [transactionId], references: [id])
 
-  @@index([transactionId], name: "idx_webhooks_transaction_id")
-  @@index([status], name: "idx_webhooks_status")
+  @@index([transactionId], map: "idx_webhooks_transaction_id")
+  @@index([status], map: "idx_webhooks_status")
   @@map("webhooks")
 }
 
@@ -340,19 +339,17 @@ model ApiKey {
   @@map("api_keys")
 }
 
-// --- Identity, passkey, guardians ---
-
 model UserPasskey {
   id           String   @id @default(uuid()) @db.Uuid
   userId       String   @map("user_id") @db.Uuid
   credentialId String   @unique @map("credential_id") @db.VarChar(512)
-  publicKey    String   @map("public_key") @db.Text
+  publicKey    String   @map("public_key")
   deviceName   String?  @map("device_name") @db.VarChar(100)
   createdAt    DateTime @default(now()) @map("created_at") @db.Timestamp(6)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId], name: "idx_user_passkey_user_id")
+  @@index([userId], map: "idx_user_passkey_user_id")
   @@map("user_passkeys")
 }
 
@@ -389,8 +386,8 @@ model UserContact {
   contactUser User? @relation("ContactOf", fields: [contactUserId], references: [id], onDelete: SetNull)
 
   @@unique([userId, contactUserId])
-  @@index([userId], name: "idx_user_contact_user_id")
-  @@index([contactUserId], name: "idx_user_contact_contact_user_id")
+  @@index([userId], map: "idx_user_contact_user_id")
+  @@index([contactUserId], map: "idx_user_contact_contact_user_id")
   @@map("user_contacts")
 }
 
@@ -409,8 +406,6 @@ model OtpChallenge {
   @@index([expiresAt], name: "idx_otp_challenge_expires_at")
   @@map("otp_challenges")
 }
-
-// --- KYC (Pi-style two-layer) ---
 
 model KycApplication {
   id                    String    @id @default(uuid()) @db.Uuid
@@ -472,8 +467,8 @@ model KycValidator {
   rewards      KycValidatorReward[]
 
   @@unique([userId, countryCode])
-  @@index([countryCode], name: "idx_kyc_validator_country")
-  @@index([status], name: "idx_kyc_validator_status")
+  @@index([countryCode], map: "idx_kyc_validator_country")
+  @@index([status], map: "idx_kyc_validator_status")
   @@map("kyc_validators")
 }
 
@@ -510,3 +505,4 @@ model KycValidatorReward {
   @@index([status], name: "idx_kyc_validator_reward_status")
   @@map("kyc_validator_rewards")
 }
+

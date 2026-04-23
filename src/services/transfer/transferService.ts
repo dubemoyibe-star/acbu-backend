@@ -2,7 +2,12 @@
  * Transfer service: resolve alias to stellarAddress, create Transaction, optionally submit Stellar payment.
  * Uses direct wallets (G...). When getSenderSigningKey is provided, signs and submits; otherwise leaves pending.
  */
-import { Operation, Asset, Keypair, TransactionBuilder } from "stellar-sdk";
+import {
+  Operation,
+  Asset,
+  Keypair,
+  TransactionBuilder,
+} from "@stellar/stellar-sdk";
 import { Decimal } from "@prisma/client/runtime/library";
 import { prisma } from "../../config/database";
 import { stellarClient } from "../stellar/client";
@@ -72,15 +77,10 @@ export async function createTransfer(
 
   const sender = await prisma.user.findUnique({
     where: { id: senderUserId },
-    select: { stellarAddress: true, kycStatus: true },
+    select: { stellarAddress: true },
   });
   if (!sender) {
     throw new Error("Sender user not found");
-  }
-  if (sender.kycStatus !== "verified") {
-    throw new Error(
-      "KYC required to make payments. Complete verification first.",
-    );
   }
 
   const recipientAddress = await resolveRecipientToStellarAddress(
@@ -108,6 +108,23 @@ export async function createTransfer(
 
   let status = "pending";
   let blockchainTxHash: string | null = null;
+
+  if (options?.submittedBlockchainTxHash) {
+    blockchainTxHash = options.submittedBlockchainTxHash;
+    status = "completed";
+    await prisma.transaction.update({
+      where: { id: tx.id },
+      data: {
+        status: "completed",
+        blockchainTxHash,
+        completedAt: new Date(),
+      },
+    });
+    return {
+      transactionId: tx.id,
+      status,
+    };
+  }
 
   const getKey = options?.getSenderSigningKey;
   if (getKey) {
