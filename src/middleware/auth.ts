@@ -6,6 +6,7 @@ import { logger } from "../config/logger";
 
 export type Audience = "retail" | "business" | "government";
 export type UserTier = "free" | "verified" | "sme" | "enterprise";
+export type ApiKeyType = "USER_KEY" | "ADMIN_KEY" | "BREAK_GLASS_KEY";
 export type PermissionScope =
   | "p2p:read"
   | "p2p:write"
@@ -32,6 +33,10 @@ export interface AuthRequest extends Request {
     id: string;
     userId: string | null;
     organizationId: string | null;
+    keyType: ApiKeyType;
+    createdByUserId: string | null;
+    emergencyReason: string | null;
+    emergencyExpiresAt: Date | null;
     permissions: string[];
     rateLimit: number;
   };
@@ -101,7 +106,17 @@ export const validateApiKey = async (
       where: {
         lookupKey: parsedApiKey.lookupKey,
         revokedAt: null,
-        OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+        AND: [
+          {
+            OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
+          },
+          {
+            OR: [
+              { keyType: { not: "BREAK_GLASS_KEY" } },
+              { emergencyExpiresAt: { gt: new Date() } },
+            ],
+          },
+        ],
       },
       include: {
         user: true,
@@ -136,6 +151,10 @@ export const validateApiKey = async (
       id: apiKeyRecord.id,
       userId: apiKeyRecord.userId ?? null,
       organizationId: apiKeyRecord.organizationId ?? null,
+      keyType: apiKeyRecord.keyType,
+      createdByUserId: apiKeyRecord.createdByUserId ?? null,
+      emergencyReason: apiKeyRecord.emergencyReason ?? null,
+      emergencyExpiresAt: apiKeyRecord.emergencyExpiresAt ?? null,
       permissions: validatePermissions(apiKeyRecord.permissions),
       rateLimit: apiKeyRecord.rateLimit,
     };
@@ -163,6 +182,15 @@ export async function hashApiKey(secret: string): Promise<string> {
 export async function generateApiKey(
   userId?: string,
   permissions: string[] = [],
+  options?: {
+    organizationId?: string | null;
+    keyType?: ApiKeyType;
+    expiresAt?: Date;
+    emergencyReason?: string;
+    emergencyExpiresAt?: Date;
+    createdByUserId?: string;
+    rateLimit?: number;
+  },
 ): Promise<string> {
   const crypto = await import("crypto");
   const lookupKey = crypto.randomBytes(6).toString("hex");
@@ -173,14 +201,22 @@ export async function generateApiKey(
   await prisma.apiKey.create({
     data: {
       userId: userId ?? null,
+      organizationId: options?.organizationId ?? null,
+      keyType: options?.keyType ?? "USER_KEY",
+      createdByUserId: options?.createdByUserId ?? null,
+      emergencyReason: options?.emergencyReason ?? null,
+      emergencyExpiresAt: options?.emergencyExpiresAt,
       lookupKey,
       keyHash,
       permissions,
+      expiresAt: options?.expiresAt,
+      rateLimit: options?.rateLimit,
     },
   });
 
   logger.info("API key generated", {
     userId,
+    keyType: options?.keyType ?? "USER_KEY",
     hasPermissions: permissions.length > 0,
   });
   return apiKey;

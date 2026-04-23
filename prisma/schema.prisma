@@ -7,6 +7,12 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum ApiKeyType {
+  USER_KEY
+  ADMIN_KEY
+  BREAK_GLASS_KEY
+}
+
 model Organization {
   id            String    @id @default(uuid()) @db.Uuid
   name          String?   @db.VarChar(255)
@@ -236,11 +242,17 @@ model AuditTrail {
   oldValue    Json?    @map("old_value")
   newValue    Json?    @map("new_value")
   performedBy String?  @map("performed_by") @db.Uuid
+  actorType   String?  @map("actor_type") @db.VarChar(20)
+  keyType     String?  @map("key_type") @db.VarChar(32)
+  organizationId String? @map("organization_id") @db.Uuid
+  reason      String?  @db.VarChar(255)
   timestamp   DateTime @default(now()) @db.Timestamp(6)
 
   @@index([eventType], map: "idx_audit_trail_event_type")
   @@index([entityType], map: "idx_audit_trail_entity_type")
   @@index([entityId], map: "idx_audit_trail_entity_id")
+  @@index([actorType, timestamp], map: "idx_audit_trail_actor_type_timestamp")
+  @@index([organizationId, timestamp], map: "idx_audit_trail_org_timestamp")
   @@index([timestamp], map: "idx_audit_trail_timestamp")
   @@map("audit_trail")
 }
@@ -308,6 +320,10 @@ model ApiKey {
   id             String        @id @default(uuid()) @db.Uuid
   userId         String?       @map("user_id") @db.Uuid
   organizationId String?       @map("organization_id") @db.Uuid
+  keyType        ApiKeyType    @default(USER_KEY) @map("key_type")
+  createdByUserId String?      @map("created_by_user_id") @db.Uuid
+  emergencyReason String?      @map("emergency_reason") @db.VarChar(255)
+  emergencyExpiresAt DateTime? @map("emergency_expires_at") @db.Timestamp(6)
   lookupKey      String?       @unique @map("lookup_key") @db.VarChar(24)
   keyHash        String        @unique @map("key_hash") @db.VarChar(255)
   permissions    Json?
@@ -321,6 +337,7 @@ model ApiKey {
 
   @@index([userId], map: "idx_api_keys_user_id")
   @@index([organizationId], map: "idx_api_keys_organization_id")
+  @@index([keyType], map: "idx_api_keys_key_type")
   @@index([keyHash], map: "idx_api_keys_key_hash")
   @@map("api_keys")
 }
