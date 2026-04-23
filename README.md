@@ -17,7 +17,7 @@ Backend API server for the ACBU (African Currency Basket Unit) platform.
 
 - Node.js 20 or higher
 - Docker and Docker Compose
-- pnpm 8+ (Required package manager)
+- pnpm 10+ (Required package manager)
 
 ## Setup Instructions
 
@@ -25,7 +25,7 @@ Backend API server for the ACBU (African Currency Basket Unit) platform.
 
 ```bash
 cd backend
-ppnpm install
+pnpm install
 ```
 
 ### 2. Environment Configuration
@@ -88,9 +88,7 @@ Nodemon will automatically restart the server when you make changes to the code.
 - `pnpm dev` - Start development server with hot reloading
 - `pnpm build` - Build TypeScript to JavaScript
 - `pnpm start` - Start production server
-- `ppnpm test` - Run tests
-- `pppnpm test:watch` - Run tests in watch mode
-- `pppnpm test:coverage` - Run tests with coverage report
+- `pnpm test` - Run tests
 - `pnpm lint` - Run ESLint
 - `pnpm lint:fix` - Fix ESLint errors
 - `pnpm format` - Format code with Prettier
@@ -150,13 +148,13 @@ pnpm prisma:migrate
 Run all tests:
 
 ```bash
-ppnpm test
+pnpm test
 ```
 
 Run tests with coverage:
 
 ```bash
-pppnpm test:coverage
+pnpm test:coverage
 ```
 
 ## Environment Variables
@@ -207,7 +205,7 @@ The CI pipeline:
 
 1. Create a feature branch
 2. Make your changes
-3. Run tests and linter: `ppnpm test && pnpm lint`
+3. Run tests and linter: `pnpm test && pnpm lint`
 4. Commit and push
 5. Create a pull request
 
