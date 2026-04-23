@@ -6,6 +6,11 @@ import { Response, NextFunction } from "express";
 import { Prisma, Reserve } from "@prisma/client";
 import { prisma } from "../config/database";
 import { AuthRequest } from "../middleware/auth";
+import { z } from "zod";
+
+const governmentStatementsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(20),
+});
 
 export async function getGovernmentTreasury(
   req: AuthRequest,
@@ -96,14 +101,12 @@ export async function getGovernmentStatements(
   try {
     const userId = req.apiKey?.userId ?? null;
     const organizationId = req.apiKey?.organizationId ?? null;
-    const rawLimit = req.query.limit;
-    let limit = 20;
-    if (rawLimit !== undefined) {
-      const parsed = Number(rawLimit);
-      if (!Number.isNaN(parsed) && parsed > 0) {
-        limit = Math.min(100, Math.max(1, Math.floor(parsed)));
-      }
+    const query = governmentStatementsQuerySchema.safeParse(req.query);
+    if (!query.success) {
+      res.status(400).json({ error: "Invalid limit" });
+      return;
     }
+    const { limit } = query.data;
     const transactions = await prisma.transaction.findMany({
       where: {
         type: { in: ["mint", "burn", "transfer"] },
