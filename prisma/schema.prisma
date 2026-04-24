@@ -25,6 +25,7 @@ model Organization {
   users         User[]    @relation("UserOrganization")
   salaryBatches   SalaryBatch[]
   salarySchedules SalarySchedule[]
+  bulkTransferJobs BulkTransferJob[]
 
   users        User[]        @relation("UserOrganization")
   apiKeys      ApiKey[]      @relation("OrganizationApiKeys")
@@ -96,6 +97,7 @@ model Transaction {
   fee                   Decimal?                @db.Decimal(20, 8)
   rateSnapshot          Json?                   @map("rate_snapshot")
   blockchainTxHash      String?                 @map("blockchain_tx_hash") @db.VarChar(255)
+  idempotencyKey        String?                 @unique @map("idempotency_key") @db.VarChar(255)
   confirmations         Int                     @default(0)
   createdAt             DateTime                @default(now()) @map("created_at") @db.Timestamp(6)
   completedAt           DateTime?               @map("completed_at") @db.Timestamp(6)
