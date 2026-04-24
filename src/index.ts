@@ -16,7 +16,18 @@ import webhookRoutes from "./routes/webhookRoutes";
 const app: express.Express = express();
 
 // Security middleware
-app.use(helmet({ contentSecurityPolicy: false }));
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+        "img-src": ["'self'", "data:", "https://validator.swagger.io"],
+        "script-src": ["'self'", "'unsafe-inline'"],
+        "style-src": ["'self'", "https:", "'unsafe-inline'"],
+      },
+    },
+  }),
+);
 app.use(corsMiddleware);
 app.use(express.urlencoded({ extended: true }));
 
