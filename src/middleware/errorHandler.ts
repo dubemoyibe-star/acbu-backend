@@ -6,11 +6,11 @@ export class AppError extends Error {
   code: string;
   details?: any;
   isOperational: boolean;
+  details?: unknown;
 
-  constructor(message: string, statusCode: number, code: string = "INTERNAL_ERROR", details?: any) {
+  constructor(message: string, statusCode: number, details?: unknown) {
     super(message);
     this.statusCode = statusCode;
-    this.code = code;
     this.details = details;
     this.isOperational = true;
     Error.captureStackTrace(this, this.constructor);
@@ -58,13 +58,15 @@ export const errorHandler = (
       code: err.code,
       path: req.path,
       method: req.method,
+      details: err.details,
     });
 
     res.status(err.statusCode).json({
       error: {
         code: err.code,
         message: err.message,
-        details: err.details,
+        statusCode: err.statusCode,
+        ...(err.details ? { details: err.details } : {}),
       },
     });
     return;
